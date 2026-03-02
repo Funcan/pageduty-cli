@@ -121,6 +121,25 @@ var reportCmd = &cobra.Command{
 			incidents = filtered
 		}
 
+		// Look up who was on-call for each incident's escalation policy.
+		policySet := map[string]bool{}
+		for _, inc := range incidents {
+			if inc.EscalationPolicyID != "" {
+				policySet[inc.EscalationPolicyID] = true
+			}
+		}
+		var policyIDs []string
+		for id := range policySet {
+			policyIDs = append(policyIDs, id)
+		}
+		var oncalls []pd.OnCall
+		if len(policyIDs) > 0 {
+			oncalls, err = client.ListPolicyOnCallsInRange(ctx, policyIDs, since.Format(time.RFC3339), until.Format(time.RFC3339))
+			if err != nil {
+				return err
+			}
+		}
+
 		// Print report header.
 		dateFmt := "Mon Jan 2, 2006"
 		fmt.Println("# On-Call Incident Report")
@@ -155,6 +174,36 @@ var reportCmd = &cobra.Command{
 			}
 			if len(inc.Teams) > 0 {
 				fmt.Printf("- **Teams:** %s\n", strings.Join(inc.Teams, ", "))
+			}
+
+			// Find who was on-call when this incident was created.
+			if createdErr == nil && inc.EscalationPolicyID != "" {
+				oncallName := ""
+				for _, oc := range oncalls {
+					if oc.PolicyID != inc.EscalationPolicyID {
+						continue
+					}
+					ocStart, err1 := time.Parse(time.RFC3339, oc.Start)
+					ocEnd, err2 := time.Parse(time.RFC3339, oc.End)
+					if err1 != nil || err2 != nil {
+						continue
+					}
+					if !created.Before(ocStart) && created.Before(ocEnd) {
+						oncallName = oc.UserName
+						break
+					}
+				}
+				// If no match from bulk data, query for this specific time.
+				if oncallName == "" {
+					t := created.Format(time.RFC3339)
+					spot, err := client.ListPolicyOnCallsInRange(ctx, []string{inc.EscalationPolicyID}, t, t)
+					if err == nil && len(spot) > 0 {
+						oncallName = spot[0].UserName
+					}
+				}
+				if oncallName != "" {
+					fmt.Printf("- **On-call:** %s\n", oncallName)
+				}
 			}
 
 			if len(inc.Acks) > 0 {

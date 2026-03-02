@@ -178,6 +178,23 @@ func (c *Client) ListPolicyOnCalls(ctx context.Context, policyIDs []string) ([]O
 	return convertOnCalls(resp.OnCalls), nil
 }
 
+// ListPolicyOnCallsInRange returns on-call entries for the given escalation
+// policy IDs within a time range.
+func (c *Client) ListPolicyOnCallsInRange(ctx context.Context, policyIDs []string, since, until string) ([]OnCall, error) {
+	resp, err := c.client.ListOnCallsWithContext(ctx, pd.ListOnCallOptions{
+		EscalationPolicyIDs: policyIDs,
+		Earliest:            true,
+		Includes:            []string{"users"},
+		Since:               since,
+		Until:               until,
+		Limit:               100,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing on-calls: %w", err)
+	}
+	return convertOnCalls(resp.OnCalls), nil
+}
+
 func convertOnCalls(oncalls []pd.OnCall) []OnCall {
 	out := make([]OnCall, len(oncalls))
 	for i, oc := range oncalls {
@@ -256,15 +273,16 @@ func sameDay(a, b time.Time, loc *time.Location) bool {
 }
 
 type Incident struct {
-	ID         string
-	Number     uint
-	Title      string
-	Status     string
-	Service    string
-	CreatedAt  string
-	ResolvedAt string
-	Acks       []Ack
-	Teams      []string
+	ID                 string
+	Number             uint
+	Title              string
+	Status             string
+	Service            string
+	CreatedAt          string
+	ResolvedAt         string
+	EscalationPolicyID string
+	Acks               []Ack
+	Teams              []string
 }
 
 type Ack struct {
@@ -317,15 +335,16 @@ func (c *Client) ListTeamIncidents(ctx context.Context, teamIDs []string, since,
 				acks[i] = Ack{Name: a.Acknowledger.Summary, At: a.At}
 			}
 			all = append(all, Incident{
-				ID:         inc.ID,
-				Number:     inc.IncidentNumber,
-				Title:      inc.Title,
-				Status:     inc.Status,
-				Service:    inc.Service.Summary,
-				CreatedAt:  inc.CreatedAt,
-				ResolvedAt: inc.ResolvedAt,
-				Acks:       acks,
-				Teams:      incTeams,
+				ID:                 inc.ID,
+				Number:             inc.IncidentNumber,
+				Title:              inc.Title,
+				Status:             inc.Status,
+				Service:            inc.Service.Summary,
+				CreatedAt:          inc.CreatedAt,
+				ResolvedAt:         inc.ResolvedAt,
+				EscalationPolicyID: inc.EscalationPolicy.ID,
+				Acks:               acks,
+				Teams:              incTeams,
 			})
 		}
 		if !resp.More {
