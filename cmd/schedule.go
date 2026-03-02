@@ -1,13 +1,12 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
-	"github.com/PagerDuty/go-pagerduty"
+	pd "pagerduty/pkg/pagerduty"
+
 	"github.com/spf13/cobra"
 )
 
@@ -25,27 +24,22 @@ var scheduleNextCmd = &cobra.Command{
 			return err
 		}
 
-		client := pagerduty.NewClient(cfg.APIKey)
-		ctx := context.Background()
+		client := pd.NewClient(cfg.APIKey)
+		ctx := cmd.Context()
 
 		query, _ := cmd.Flags().GetString("user")
-		userID, userName, err := resolveUser(ctx, client, query)
+		userID, userName, err := client.ResolveUser(ctx, query)
 		if err != nil {
 			return err
 		}
 
 		now := time.Now()
-		resp, err := client.ListOnCallsWithContext(ctx, pagerduty.ListOnCallOptions{
-			UserIDs: []string{userID},
-			Since:   now.Format(time.RFC3339),
-			Until:   now.AddDate(0, 3, 0).Format(time.RFC3339),
-			Limit:   100,
-		})
+		oncalls, err := client.ListUserOnCalls(ctx, userID, now.Format(time.RFC3339), now.AddDate(0, 3, 0).Format(time.RFC3339))
 		if err != nil {
-			return fmt.Errorf("listing on-calls: %w", err)
+			return err
 		}
 
-		runs := mergeOnCallRuns(resp.OnCalls)
+		runs := pd.MergeOnCallRuns(oncalls)
 		if len(runs) == 0 {
 			fmt.Printf("No upcoming on-call shifts for %s in the next 3 months.\n", userName)
 			return nil
@@ -53,7 +47,7 @@ var scheduleNextCmd = &cobra.Command{
 
 		// Keep only the first run per schedule.
 		seen := map[string]bool{}
-		var first []oncallRun
+		var first []pd.OnCallRun
 		for _, r := range runs {
 			if !seen[r.Schedule] {
 				seen[r.Schedule] = true
@@ -82,40 +76,35 @@ var scheduleLastCmd = &cobra.Command{
 			return err
 		}
 
-		client := pagerduty.NewClient(cfg.APIKey)
-		ctx := context.Background()
+		client := pd.NewClient(cfg.APIKey)
+		ctx := cmd.Context()
 
 		query, _ := cmd.Flags().GetString("user")
-		userID, userName, err := resolveUser(ctx, client, query)
+		userID, userName, err := client.ResolveUser(ctx, query)
 		if err != nil {
 			return err
 		}
 
 		now := time.Now()
-		resp, err := client.ListOnCallsWithContext(ctx, pagerduty.ListOnCallOptions{
-			UserIDs: []string{userID},
-			Since:   now.AddDate(0, -3, 0).Format(time.RFC3339),
-			Until:   now.Format(time.RFC3339),
-			Limit:   100,
-		})
+		oncalls, err := client.ListUserOnCalls(ctx, userID, now.AddDate(0, -3, 0).Format(time.RFC3339), now.Format(time.RFC3339))
 		if err != nil {
-			return fmt.Errorf("listing on-calls: %w", err)
+			return err
 		}
 
-		runs := mergeOnCallRuns(resp.OnCalls)
+		runs := pd.MergeOnCallRuns(oncalls)
 		if len(runs) == 0 {
 			fmt.Printf("No on-call shifts for %s in the last 3 months.\n", userName)
 			return nil
 		}
 
 		// Keep only the last run per schedule.
-		last := map[string]oncallRun{}
+		last := map[string]pd.OnCallRun{}
 		for _, r := range runs {
 			last[r.Schedule] = r
 		}
 
 		// Sort by start time for consistent output.
-		var result []oncallRun
+		var result []pd.OnCallRun
 		for _, r := range last {
 			result = append(result, r)
 		}
@@ -144,32 +133,27 @@ var scheduleNowCmd = &cobra.Command{
 			return err
 		}
 
-		client := pagerduty.NewClient(cfg.APIKey)
-		ctx := context.Background()
+		client := pd.NewClient(cfg.APIKey)
+		ctx := cmd.Context()
 
 		serviceQuery, _ := cmd.Flags().GetString("service")
 
 		var policyIDs []string
 		if serviceQuery != "" {
-			policyIDs, err = resolveServicePolicies(ctx, client, serviceQuery)
+			policyIDs, err = client.ResolveServicePolicies(ctx, serviceQuery)
 		} else {
-			policyIDs, err = currentUserPolicies(ctx, client)
+			policyIDs, err = client.CurrentUserPolicies(ctx)
 		}
 		if err != nil {
 			return err
 		}
 
-		resp, err := client.ListOnCallsWithContext(ctx, pagerduty.ListOnCallOptions{
-			EscalationPolicyIDs: policyIDs,
-			Earliest:            true,
-			Includes:            []string{"users"},
-			Limit:               100,
-		})
+		oncalls, err := client.ListPolicyOnCalls(ctx, policyIDs)
 		if err != nil {
-			return fmt.Errorf("listing on-calls: %w", err)
+			return err
 		}
 
-		if len(resp.OnCalls) == 0 {
+		if len(oncalls) == 0 {
 			fmt.Println("No one is currently on call.")
 			return nil
 		}
@@ -181,15 +165,15 @@ var scheduleNowCmd = &cobra.Command{
 		}
 		schedules := map[string]*scheduleEntry{}
 		var order []string
-		for _, oc := range resp.OnCalls {
-			key := oc.Schedule.ID
+		for _, oc := range oncalls {
+			key := oc.ScheduleID
 			if key == "" {
-				key = oc.EscalationPolicy.ID
+				key = oc.PolicyID
 			}
 			if _, ok := schedules[key]; !ok {
-				name := oc.Schedule.Summary
+				name := oc.ScheduleName
 				if name == "" {
-					name = oc.EscalationPolicy.Summary
+					name = oc.PolicyName
 				}
 				schedules[key] = &scheduleEntry{name: name}
 				order = append(order, key)
@@ -198,7 +182,7 @@ var scheduleNowCmd = &cobra.Command{
 			if t, err := time.Parse(time.RFC3339, oc.End); err == nil {
 				end = fmt.Sprintf(" (until %s)", t.Local().Format("Mon Jan 2  3:04 PM MST"))
 			}
-			schedules[key].users = append(schedules[key].users, oc.User.Name+end)
+			schedules[key].users = append(schedules[key].users, oc.UserName+end)
 		}
 
 		fmt.Println("Currently on-call:")
@@ -213,155 +197,6 @@ var scheduleNowCmd = &cobra.Command{
 
 		return nil
 	},
-}
-
-func resolveUser(ctx context.Context, client *pagerduty.Client, query string) (string, string, error) {
-	if query == "" {
-		user, err := client.GetCurrentUserWithContext(ctx, pagerduty.GetCurrentUserOptions{})
-		if err != nil {
-			return "", "", fmt.Errorf("getting current user: %w", err)
-		}
-		return user.ID, user.Name, nil
-	}
-
-	resp, err := client.ListUsersWithContext(ctx, pagerduty.ListUsersOptions{Query: query})
-	if err != nil {
-		return "", "", fmt.Errorf("searching users: %w", err)
-	}
-
-	switch len(resp.Users) {
-	case 0:
-		return "", "", fmt.Errorf("no users matching %q", query)
-	case 1:
-		return resp.Users[0].ID, resp.Users[0].Name, nil
-	default:
-		var lines []string
-		for _, u := range resp.Users {
-			lines = append(lines, fmt.Sprintf("  - %s (%s)", u.Name, u.Email))
-		}
-		return "", "", fmt.Errorf("multiple users match %q:\n%s", query, strings.Join(lines, "\n"))
-	}
-}
-
-func currentUserPolicies(ctx context.Context, client *pagerduty.Client) ([]string, error) {
-	user, err := client.GetCurrentUserWithContext(ctx, pagerduty.GetCurrentUserOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("getting current user: %w", err)
-	}
-
-	// Look 3 months ahead to find all schedules the user is a member of.
-	now := time.Now()
-	resp, err := client.ListOnCallsWithContext(ctx, pagerduty.ListOnCallOptions{
-		UserIDs: []string{user.ID},
-		Since:   now.Format(time.RFC3339),
-		Until:   now.AddDate(0, 3, 0).Format(time.RFC3339),
-		Limit:   100,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("listing on-calls: %w", err)
-	}
-
-	seen := map[string]bool{}
-	var ids []string
-	for _, oc := range resp.OnCalls {
-		id := oc.EscalationPolicy.ID
-		if id != "" && !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		return nil, fmt.Errorf("no schedules found for current user in the next 3 months")
-	}
-	return ids, nil
-}
-
-func resolveServicePolicies(ctx context.Context, client *pagerduty.Client, query string) ([]string, error) {
-	resp, err := client.ListServicesWithContext(ctx, pagerduty.ListServiceOptions{Query: query})
-	if err != nil {
-		return nil, fmt.Errorf("searching services: %w", err)
-	}
-
-	switch len(resp.Services) {
-	case 0:
-		return nil, fmt.Errorf("no services matching %q", query)
-	case 1:
-		return []string{resp.Services[0].EscalationPolicy.ID}, nil
-	default:
-		var lines []string
-		for _, s := range resp.Services {
-			lines = append(lines, fmt.Sprintf("  - %s", s.Name))
-		}
-		return nil, fmt.Errorf("multiple services match %q:\n%s", query, strings.Join(lines, "\n"))
-	}
-}
-
-type oncallRun struct {
-	Schedule string
-	Start    time.Time
-	End      time.Time
-}
-
-// mergeOnCallRuns groups on-call entries by schedule, merges entries that share
-// a calendar day (local time) into continuous runs, and returns the first run
-// per schedule sorted by start time.
-func mergeOnCallRuns(oncalls []pagerduty.OnCall) []oncallRun {
-	type entry struct {
-		schedule string
-		start    time.Time
-		end      time.Time
-	}
-
-	bySchedule := map[string][]entry{}
-	for _, oc := range oncalls {
-		start, err1 := time.Parse(time.RFC3339, oc.Start)
-		end, err2 := time.Parse(time.RFC3339, oc.End)
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		name := oc.Schedule.Summary
-		if name == "" {
-			name = "(direct assignment)"
-		}
-		key := oc.Schedule.ID
-		bySchedule[key] = append(bySchedule[key], entry{schedule: name, start: start, end: end})
-	}
-
-	var runs []oncallRun
-	for _, entries := range bySchedule {
-		sort.Slice(entries, func(i, j int) bool {
-			return entries[i].start.Before(entries[j].start)
-		})
-
-		run := oncallRun{
-			Schedule: entries[0].schedule,
-			Start:    entries[0].start,
-			End:      entries[0].end,
-		}
-		for _, e := range entries[1:] {
-			if sameLocalDay(run.End, e.start) || !e.start.After(run.End) {
-				if e.end.After(run.End) {
-					run.End = e.end
-				}
-			} else {
-				runs = append(runs, run)
-				run = oncallRun{Schedule: e.schedule, Start: e.start, End: e.end}
-			}
-		}
-		runs = append(runs, run)
-	}
-
-	sort.Slice(runs, func(i, j int) bool {
-		return runs[i].Start.Before(runs[j].Start)
-	})
-
-	return runs
-}
-
-func sameLocalDay(a, b time.Time) bool {
-	ay, am, ad := a.Local().Date()
-	by, bm, bd := b.Local().Date()
-	return ay == by && am == bm && ad == bd
 }
 
 func init() {
