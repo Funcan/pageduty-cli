@@ -224,7 +224,7 @@ func MergeOnCallRuns(oncalls []OnCall) []OnCallRun {
 			End:      entries[0].end,
 		}
 		for _, e := range entries[1:] {
-			if sameLocalDay(run.End, e.start) || !e.start.After(run.End) {
+			if sameDay(run.End, e.start, time.Local) || !e.start.After(run.End) {
 				if e.end.After(run.End) {
 					run.End = e.end
 				}
@@ -243,8 +243,8 @@ func MergeOnCallRuns(oncalls []OnCall) []OnCallRun {
 	return runs
 }
 
-func sameLocalDay(a, b time.Time) bool {
-	ay, am, ad := a.Local().Date()
-	by, bm, bd := b.Local().Date()
+func sameDay(a, b time.Time, loc *time.Location) bool {
+	ay, am, ad := a.In(loc).Date()
+	by, bm, bd := b.In(loc).Date()
 	return ay == by && am == bm && ad == bd
 }

@@ -108,3 +108,69 @@ func mustParse(s string) time.Time {
 	}
 	return t
 }
+
+func TestSameDay(t *testing.T) {
+	utc := time.UTC
+	tokyo := time.FixedZone("Asia/Tokyo", 9*60*60)      // UTC+9
+	nyc := time.FixedZone("America/New_York", -5*60*60) // UTC-5
+
+	tests := []struct {
+		name string
+		a, b time.Time
+		loc  *time.Location
+		want bool
+	}{
+		{
+			name: "same instant is same day",
+			a:    mustParse("2025-03-01T12:00:00Z"),
+			b:    mustParse("2025-03-01T12:00:00Z"),
+			loc:  utc,
+			want: true,
+		},
+		{
+			name: "different UTC days",
+			a:    mustParse("2025-03-01T23:00:00Z"),
+			b:    mustParse("2025-03-02T01:00:00Z"),
+			loc:  utc,
+			want: false,
+		},
+		{
+			name: "different UTC days but same day in UTC+9",
+			a:    mustParse("2025-03-01T23:00:00Z"), // Mar 2 08:00 Tokyo
+			b:    mustParse("2025-03-02T01:00:00Z"), // Mar 2 10:00 Tokyo
+			loc:  tokyo,
+			want: true,
+		},
+		{
+			name: "same UTC day but different days in UTC-5",
+			a:    mustParse("2025-03-02T04:00:00Z"), // Mar 1 23:00 NYC
+			b:    mustParse("2025-03-02T06:00:00Z"), // Mar 2 01:00 NYC
+			loc:  nyc,
+			want: false,
+		},
+		{
+			name: "midnight boundary same day",
+			a:    mustParse("2025-03-01T00:00:00Z"),
+			b:    mustParse("2025-03-01T23:59:59Z"),
+			loc:  utc,
+			want: true,
+		},
+		{
+			name: "midnight boundary different days",
+			a:    mustParse("2025-03-01T23:59:59Z"),
+			b:    mustParse("2025-03-02T00:00:00Z"),
+			loc:  utc,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sameDay(tt.a, tt.b, tt.loc)
+			if got != tt.want {
+				t.Errorf("sameDay(%v, %v, %s) = %v, want %v",
+					tt.a, tt.b, tt.loc, got, tt.want)
+			}
+		})
+	}
+}
