@@ -139,8 +139,78 @@ var scheduleNowCmd = &cobra.Command{
 	Use:   "now",
 	Short: "Show who is currently on call",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		service, _ := cmd.Flags().GetString("service")
-		fmt.Printf("schedule now (service=%q) - not yet implemented\n", service)
+		cfg, err := LoadConfig()
+		if err != nil {
+			return err
+		}
+
+		client := pagerduty.NewClient(cfg.APIKey)
+		ctx := context.Background()
+
+		serviceQuery, _ := cmd.Flags().GetString("service")
+
+		var policyIDs []string
+		if serviceQuery != "" {
+			policyIDs, err = resolveServicePolicies(ctx, client, serviceQuery)
+		} else {
+			policyIDs, err = currentUserPolicies(ctx, client)
+		}
+		if err != nil {
+			return err
+		}
+
+		resp, err := client.ListOnCallsWithContext(ctx, pagerduty.ListOnCallOptions{
+			EscalationPolicyIDs: policyIDs,
+			Earliest:            true,
+			Includes:            []string{"users"},
+			Limit:               100,
+		})
+		if err != nil {
+			return fmt.Errorf("listing on-calls: %w", err)
+		}
+
+		if len(resp.OnCalls) == 0 {
+			fmt.Println("No one is currently on call.")
+			return nil
+		}
+
+		// Group by schedule.
+		type scheduleEntry struct {
+			name  string
+			users []string
+		}
+		schedules := map[string]*scheduleEntry{}
+		var order []string
+		for _, oc := range resp.OnCalls {
+			key := oc.Schedule.ID
+			if key == "" {
+				key = oc.EscalationPolicy.ID
+			}
+			if _, ok := schedules[key]; !ok {
+				name := oc.Schedule.Summary
+				if name == "" {
+					name = oc.EscalationPolicy.Summary
+				}
+				schedules[key] = &scheduleEntry{name: name}
+				order = append(order, key)
+			}
+			end := ""
+			if t, err := time.Parse(time.RFC3339, oc.End); err == nil {
+				end = fmt.Sprintf(" (until %s)", t.Local().Format("Mon Jan 2  3:04 PM MST"))
+			}
+			schedules[key].users = append(schedules[key].users, oc.User.Name+end)
+		}
+
+		fmt.Println("Currently on-call:")
+		for _, key := range order {
+			s := schedules[key]
+			fmt.Println()
+			fmt.Printf("  %s:\n", s.name)
+			for _, u := range s.users {
+				fmt.Printf("    - %s\n", u)
+			}
+		}
+
 		return nil
 	},
 }
@@ -170,6 +240,59 @@ func resolveUser(ctx context.Context, client *pagerduty.Client, query string) (s
 			lines = append(lines, fmt.Sprintf("  - %s (%s)", u.Name, u.Email))
 		}
 		return "", "", fmt.Errorf("multiple users match %q:\n%s", query, strings.Join(lines, "\n"))
+	}
+}
+
+func currentUserPolicies(ctx context.Context, client *pagerduty.Client) ([]string, error) {
+	user, err := client.GetCurrentUserWithContext(ctx, pagerduty.GetCurrentUserOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("getting current user: %w", err)
+	}
+
+	// Look 3 months ahead to find all schedules the user is a member of.
+	now := time.Now()
+	resp, err := client.ListOnCallsWithContext(ctx, pagerduty.ListOnCallOptions{
+		UserIDs: []string{user.ID},
+		Since:   now.Format(time.RFC3339),
+		Until:   now.AddDate(0, 3, 0).Format(time.RFC3339),
+		Limit:   100,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing on-calls: %w", err)
+	}
+
+	seen := map[string]bool{}
+	var ids []string
+	for _, oc := range resp.OnCalls {
+		id := oc.EscalationPolicy.ID
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("no schedules found for current user in the next 3 months")
+	}
+	return ids, nil
+}
+
+func resolveServicePolicies(ctx context.Context, client *pagerduty.Client, query string) ([]string, error) {
+	resp, err := client.ListServicesWithContext(ctx, pagerduty.ListServiceOptions{Query: query})
+	if err != nil {
+		return nil, fmt.Errorf("searching services: %w", err)
+	}
+
+	switch len(resp.Services) {
+	case 0:
+		return nil, fmt.Errorf("no services matching %q", query)
+	case 1:
+		return []string{resp.Services[0].EscalationPolicy.ID}, nil
+	default:
+		var lines []string
+		for _, s := range resp.Services {
+			lines = append(lines, fmt.Sprintf("  - %s", s.Name))
+		}
+		return nil, fmt.Errorf("multiple services match %q:\n%s", query, strings.Join(lines, "\n"))
 	}
 }
 
