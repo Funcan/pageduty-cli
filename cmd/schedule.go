@@ -51,8 +51,18 @@ var scheduleNextCmd = &cobra.Command{
 			return nil
 		}
 
-		fmt.Printf("Next on-call for %s:\n", userName)
+		// Keep only the first run per schedule.
+		seen := map[string]bool{}
+		var first []oncallRun
 		for _, r := range runs {
+			if !seen[r.Schedule] {
+				seen[r.Schedule] = true
+				first = append(first, r)
+			}
+		}
+
+		fmt.Printf("Next on-call for %s:\n", userName)
+		for _, r := range first {
 			fmt.Println()
 			fmt.Printf("  Schedule:  %s\n", r.Schedule)
 			fmt.Printf("  Start:     %s\n", r.Start.Local().Format("Mon Jan 2  3:04 PM MST"))
@@ -67,8 +77,60 @@ var scheduleLastCmd = &cobra.Command{
 	Use:   "last",
 	Short: "Show when you were last on call",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		user, _ := cmd.Flags().GetString("user")
-		fmt.Printf("schedule last (user=%q) - not yet implemented\n", user)
+		cfg, err := LoadConfig()
+		if err != nil {
+			return err
+		}
+
+		client := pagerduty.NewClient(cfg.APIKey)
+		ctx := context.Background()
+
+		query, _ := cmd.Flags().GetString("user")
+		userID, userName, err := resolveUser(ctx, client, query)
+		if err != nil {
+			return err
+		}
+
+		now := time.Now()
+		resp, err := client.ListOnCallsWithContext(ctx, pagerduty.ListOnCallOptions{
+			UserIDs: []string{userID},
+			Since:   now.AddDate(0, -3, 0).Format(time.RFC3339),
+			Until:   now.Format(time.RFC3339),
+			Limit:   100,
+		})
+		if err != nil {
+			return fmt.Errorf("listing on-calls: %w", err)
+		}
+
+		runs := mergeOnCallRuns(resp.OnCalls)
+		if len(runs) == 0 {
+			fmt.Printf("No on-call shifts for %s in the last 3 months.\n", userName)
+			return nil
+		}
+
+		// Keep only the last run per schedule.
+		last := map[string]oncallRun{}
+		for _, r := range runs {
+			last[r.Schedule] = r
+		}
+
+		// Sort by start time for consistent output.
+		var result []oncallRun
+		for _, r := range last {
+			result = append(result, r)
+		}
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Start.Before(result[j].Start)
+		})
+
+		fmt.Printf("Last on-call for %s:\n", userName)
+		for _, r := range result {
+			fmt.Println()
+			fmt.Printf("  Schedule:  %s\n", r.Schedule)
+			fmt.Printf("  Start:     %s\n", r.Start.Local().Format("Mon Jan 2  3:04 PM MST"))
+			fmt.Printf("  End:       %s\n", r.End.Local().Format("Mon Jan 2  3:04 PM MST"))
+		}
+
 		return nil
 	},
 }
@@ -170,16 +232,7 @@ func mergeOnCallRuns(oncalls []pagerduty.OnCall) []oncallRun {
 		return runs[i].Start.Before(runs[j].Start)
 	})
 
-	// Keep only the first run per schedule.
-	seen := map[string]bool{}
-	filtered := runs[:0]
-	for _, r := range runs {
-		if !seen[r.Schedule] {
-			seen[r.Schedule] = true
-			filtered = append(filtered, r)
-		}
-	}
-	return filtered
+	return runs
 }
 
 func sameLocalDay(a, b time.Time) bool {
