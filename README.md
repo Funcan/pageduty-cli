@@ -22,3 +22,5 @@ Usage:
 `pagerduty schedule now --service <service>` - show me who is currently on call for a specific service - search by name
 
 `pagerduty whoami` - show me details about my account - my configured name, email, and teams
+
+`pageduty report` [--from <date>] [--to <date>] - generate a markdown formatted report of incidents - list of all incidents that got assigned to my team(s) in the time frame, who acked them, and any notes added. Defaults to from the beginning to the end of my last shift

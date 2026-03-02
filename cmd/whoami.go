@@ -27,7 +27,11 @@ var whoamiCmd = &cobra.Command{
 		fmt.Printf("Name:   %s\n", user.Name)
 		fmt.Printf("Email:  %s\n", user.Email)
 		if len(user.Teams) > 0 {
-			fmt.Printf("Teams:  %s\n", strings.Join(user.Teams, ", "))
+			names := make([]string, len(user.Teams))
+			for i, t := range user.Teams {
+				names[i] = t.Name
+			}
+			fmt.Printf("Teams:  %s\n", strings.Join(names, ", "))
 		}
 
 		return nil

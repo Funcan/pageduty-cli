@@ -34,10 +34,16 @@ type OnCallRun struct {
 	End      time.Time
 }
 
+type Team struct {
+	ID   string
+	Name string
+}
+
 type User struct {
+	ID    string
 	Name  string
 	Email string
-	Teams []string
+	Teams []Team
 }
 
 // GetCurrentUser returns details about the authenticated user.
@@ -49,11 +55,11 @@ func (c *Client) GetCurrentUser(ctx context.Context) (*User, error) {
 		return nil, fmt.Errorf("getting current user: %w", err)
 	}
 
-	teams := make([]string, len(user.Teams))
+	teams := make([]Team, len(user.Teams))
 	for i, t := range user.Teams {
-		teams[i] = t.Name
+		teams[i] = Team{ID: t.ID, Name: t.Name}
 	}
-	return &User{Name: user.Name, Email: user.Email, Teams: teams}, nil
+	return &User{ID: user.ID, Name: user.Name, Email: user.Email, Teams: teams}, nil
 }
 
 // ResolveUser looks up a user by query string (name or email). If query is
@@ -247,4 +253,102 @@ func sameDay(a, b time.Time, loc *time.Location) bool {
 	ay, am, ad := a.In(loc).Date()
 	by, bm, bd := b.In(loc).Date()
 	return ay == by && am == bm && ad == bd
+}
+
+type Incident struct {
+	ID         string
+	Number     uint
+	Title      string
+	Status     string
+	Service    string
+	CreatedAt  string
+	ResolvedAt string
+	Acks       []Ack
+	Teams      []string
+}
+
+type Ack struct {
+	Name string
+	At   string
+}
+
+type IncidentNote struct {
+	User      string
+	Content   string
+	CreatedAt string
+}
+
+// ListTeamIncidents returns all incidents for the given team IDs within a time range.
+// The API's team_ids filter matches on service association, so we also filter
+// client-side to only include incidents explicitly tagged with the requested teams.
+func (c *Client) ListTeamIncidents(ctx context.Context, teamIDs []string, since, until string) ([]Incident, error) {
+	wanted := map[string]bool{}
+	for _, id := range teamIDs {
+		wanted[id] = true
+	}
+
+	var all []Incident
+	opts := pd.ListIncidentsOptions{
+		TeamIDs:  teamIDs,
+		Since:    since,
+		Until:    until,
+		Statuses: []string{"triggered", "acknowledged", "resolved"},
+		Limit:    100,
+	}
+	for {
+		resp, err := c.client.ListIncidentsWithContext(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("listing incidents: %w", err)
+		}
+		for _, inc := range resp.Incidents {
+			var incTeams []string
+			match := false
+			for _, t := range inc.Teams {
+				incTeams = append(incTeams, t.Summary)
+				if wanted[t.ID] {
+					match = true
+				}
+			}
+			if !match {
+				continue
+			}
+			acks := make([]Ack, len(inc.Acknowledgements))
+			for i, a := range inc.Acknowledgements {
+				acks[i] = Ack{Name: a.Acknowledger.Summary, At: a.At}
+			}
+			all = append(all, Incident{
+				ID:         inc.ID,
+				Number:     inc.IncidentNumber,
+				Title:      inc.Title,
+				Status:     inc.Status,
+				Service:    inc.Service.Summary,
+				CreatedAt:  inc.CreatedAt,
+				ResolvedAt: inc.ResolvedAt,
+				Acks:       acks,
+				Teams:      incTeams,
+			})
+		}
+		if !resp.More {
+			break
+		}
+		opts.Offset += opts.Limit
+	}
+	return all, nil
+}
+
+// ListIncidentNotes returns all notes for the given incident.
+func (c *Client) ListIncidentNotes(ctx context.Context, incidentID string) ([]IncidentNote, error) {
+	notes, err := c.client.ListIncidentNotesWithContext(ctx, incidentID)
+	if err != nil {
+		return nil, fmt.Errorf("listing incident notes: %w", err)
+	}
+	out := make([]IncidentNote, len(notes))
+	for i, n := range notes {
+		out[i] = IncidentNote{
+			User:      n.User.Summary,
+			Content:   n.Content,
+			CreatedAt: n.CreatedAt,
+		}
+	}
+	return out, nil
 }
