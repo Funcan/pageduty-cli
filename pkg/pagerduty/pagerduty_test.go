@@ -60,11 +60,11 @@ func TestMergeOnCallRuns(t *testing.T) {
 			name: "different schedules stay separate",
 			oncalls: []OnCall{
 				{ScheduleID: "S1", ScheduleName: "Primary", Start: "2025-03-01T09:00:00Z", End: "2025-03-02T09:00:00Z"},
-				{ScheduleID: "S2", ScheduleName: "Secondary", Start: "2025-03-01T09:00:00Z", End: "2025-03-02T09:00:00Z"},
+				{ScheduleID: "S2", ScheduleName: "Secondary", Start: "2025-03-01T17:00:00Z", End: "2025-03-02T17:00:00Z"},
 			},
 			want: []OnCallRun{
 				{Schedule: "Primary", Start: mustParse("2025-03-01T09:00:00Z"), End: mustParse("2025-03-02T09:00:00Z")},
-				{Schedule: "Secondary", Start: mustParse("2025-03-01T09:00:00Z"), End: mustParse("2025-03-02T09:00:00Z")},
+				{Schedule: "Secondary", Start: mustParse("2025-03-01T17:00:00Z"), End: mustParse("2025-03-02T17:00:00Z")},
 			},
 		},
 		{

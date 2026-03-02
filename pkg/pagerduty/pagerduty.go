@@ -34,6 +34,28 @@ type OnCallRun struct {
 	End      time.Time
 }
 
+type User struct {
+	Name  string
+	Email string
+	Teams []string
+}
+
+// GetCurrentUser returns details about the authenticated user.
+func (c *Client) GetCurrentUser(ctx context.Context) (*User, error) {
+	user, err := c.client.GetCurrentUserWithContext(ctx, pd.GetCurrentUserOptions{
+		Includes: []string{"teams"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("getting current user: %w", err)
+	}
+
+	teams := make([]string, len(user.Teams))
+	for i, t := range user.Teams {
+		teams[i] = t.Name
+	}
+	return &User{Name: user.Name, Email: user.Email, Teams: teams}, nil
+}
+
 // ResolveUser looks up a user by query string (name or email). If query is
 // empty, it returns the currently authenticated user.
 func (c *Client) ResolveUser(ctx context.Context, query string) (id, name string, err error) {
