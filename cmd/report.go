@@ -286,6 +286,37 @@ var reportCmd = &cobra.Command{
 			}
 		}
 
+		// Statistics.
+		openAtStart := 0
+		newCount := 0
+		closed := 0
+		leftOpen := 0
+		for _, inc := range incidents {
+			created, err := time.Parse(time.RFC3339, inc.CreatedAt)
+			if err == nil && created.Before(since) {
+				openAtStart++
+			} else {
+				newCount++
+			}
+			if inc.Status == "resolved" {
+				closed++
+			} else {
+				leftOpen++
+			}
+		}
+		fmt.Println()
+		fmt.Println("---")
+		fmt.Println()
+		fmt.Println("## Statistics")
+		fmt.Println()
+		printTable([][]string{
+			{"Metric", "Count"},
+			{"Open at start of period", fmt.Sprintf("%d", openAtStart)},
+			{"New incidents", fmt.Sprintf("%d", newCount)},
+			{"Closed", fmt.Sprintf("%d", closed)},
+			{"Left open", fmt.Sprintf("%d", leftOpen)},
+		})
+
 		return nil
 	},
 }
@@ -315,4 +346,39 @@ func formatDuration(d time.Duration) string {
 		parts = append(parts, fmt.Sprintf("%dm", minutes))
 	}
 	return strings.Join(parts, " ")
+}
+
+// printTable prints a markdown table with space-padded columns so it reads
+// well in plain text. The first row is treated as the header.
+func printTable(rows [][]string) {
+	if len(rows) == 0 {
+		return
+	}
+	cols := len(rows[0])
+	widths := make([]int, cols)
+	for _, row := range rows {
+		for c := 0; c < cols && c < len(row); c++ {
+			if len(row[c]) > widths[c] {
+				widths[c] = len(row[c])
+			}
+		}
+	}
+	for i, row := range rows {
+		fmt.Print("|")
+		for c := 0; c < cols; c++ {
+			cell := ""
+			if c < len(row) {
+				cell = row[c]
+			}
+			fmt.Printf(" %-*s |", widths[c], cell)
+		}
+		fmt.Println()
+		if i == 0 {
+			fmt.Print("|")
+			for c := 0; c < cols; c++ {
+				fmt.Printf(" %s |", strings.Repeat("-", widths[c]))
+			}
+			fmt.Println()
+		}
+	}
 }
