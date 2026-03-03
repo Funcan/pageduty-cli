@@ -111,38 +111,41 @@ var reportCmd = &cobra.Command{
 		}
 
 		// Also fetch incidents that were already open at the start of the period.
-		carryover, err := client.ListTeamIncidents(ctx, teamIDs, since.AddDate(0, -3, 0).Format(time.RFC3339), since.Format(time.RFC3339))
-		if err != nil {
-			return err
-		}
-		seen := map[string]bool{}
-		for _, inc := range incidents {
-			seen[inc.ID] = true
-		}
+		noPrevious, _ := cmd.Flags().GetBool("no-previous")
 		carryoverCount := 0
-		for _, inc := range carryover {
-			if seen[inc.ID] {
-				continue
+		if !noPrevious {
+			carryover, err := client.ListTeamIncidents(ctx, teamIDs, since.AddDate(0, -3, 0).Format(time.RFC3339), since.Format(time.RFC3339))
+			if err != nil {
+				return err
 			}
-			keep := false
-			reason := ""
-			if inc.Status != "resolved" {
-				keep = true
-				reason = fmt.Sprintf("status=%s", inc.Status)
-			} else if resolved, err := time.Parse(time.RFC3339, inc.ResolvedAt); err == nil && !resolved.Before(since) {
-				keep = true
-				reason = fmt.Sprintf("resolved=%s (after period start)", inc.ResolvedAt)
+			seen := map[string]bool{}
+			for _, inc := range incidents {
+				seen[inc.ID] = true
 			}
-			if keep {
-				incidents = append(incidents, inc)
-				carryoverCount++
-				if verbose {
-					fmt.Fprintf(os.Stderr, "[carryover] INC-%d %s (%s)\n", inc.Number, inc.Title, reason)
+			for _, inc := range carryover {
+				if seen[inc.ID] {
+					continue
+				}
+				keep := false
+				reason := ""
+				if inc.Status != "resolved" {
+					keep = true
+					reason = fmt.Sprintf("status=%s", inc.Status)
+				} else if resolved, err := time.Parse(time.RFC3339, inc.ResolvedAt); err == nil && !resolved.Before(since) {
+					keep = true
+					reason = fmt.Sprintf("resolved=%s (after period start)", inc.ResolvedAt)
+				}
+				if keep {
+					incidents = append(incidents, inc)
+					carryoverCount++
+					if verbose {
+						fmt.Fprintf(os.Stderr, "[carryover] INC-%d %s (%s)\n", inc.Number, inc.Title, reason)
+					}
 				}
 			}
-		}
-		if verbose {
-			fmt.Fprintf(os.Stderr, "[carryover] %d incidents carried over from before period\n", carryoverCount)
+			if verbose {
+				fmt.Fprintf(os.Stderr, "[carryover] %d incidents carried over from before period\n", carryoverCount)
+			}
 		}
 
 		sort.Slice(incidents, func(i, j int) bool {
@@ -309,13 +312,16 @@ var reportCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Println("## Statistics")
 		fmt.Println()
-		printTable([][]string{
-			{"Metric", "Count"},
-			{"Open at start of period", fmt.Sprintf("%d", openAtStart)},
-			{"New incidents", fmt.Sprintf("%d", newCount)},
-			{"Closed", fmt.Sprintf("%d", closed)},
-			{"Left open", fmt.Sprintf("%d", leftOpen)},
-		})
+		rows := [][]string{{"Metric", "Count"}}
+		if !noPrevious {
+			rows = append(rows, []string{"Open at start of period", fmt.Sprintf("%d", openAtStart)})
+		}
+		rows = append(rows,
+			[]string{"New incidents", fmt.Sprintf("%d", newCount)},
+			[]string{"Closed", fmt.Sprintf("%d", closed)},
+			[]string{"Left open", fmt.Sprintf("%d", leftOpen)},
+		)
+		printTable(rows)
 
 		return nil
 	},
@@ -326,6 +332,7 @@ func init() {
 	reportCmd.Flags().String("to", "", "end date (YYYY-MM-DD)")
 	reportCmd.Flags().String("teams", "", "comma-separated team names to filter by")
 	reportCmd.Flags().String("service", "", "comma-separated service names to filter by")
+	reportCmd.Flags().Bool("no-previous", false, "exclude incidents that were open before the period")
 	rootCmd.AddCommand(reportCmd)
 }
 
