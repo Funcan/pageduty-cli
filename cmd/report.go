@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,7 +21,8 @@ var reportCmd = &cobra.Command{
 			return err
 		}
 
-		client := pd.NewClient(cfg.APIKey)
+		verbose, _ := cmd.Flags().GetBool("verbose")
+		client := pd.NewClient(cfg.APIKey, verbose)
 		ctx := cmd.Context()
 
 		user, err := client.GetCurrentUser(ctx)
@@ -106,6 +109,45 @@ var reportCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		// Also fetch incidents that were already open at the start of the period.
+		carryover, err := client.ListTeamIncidents(ctx, teamIDs, since.AddDate(0, -3, 0).Format(time.RFC3339), since.Format(time.RFC3339))
+		if err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for _, inc := range incidents {
+			seen[inc.ID] = true
+		}
+		carryoverCount := 0
+		for _, inc := range carryover {
+			if seen[inc.ID] {
+				continue
+			}
+			keep := false
+			reason := ""
+			if inc.Status != "resolved" {
+				keep = true
+				reason = fmt.Sprintf("status=%s", inc.Status)
+			} else if resolved, err := time.Parse(time.RFC3339, inc.ResolvedAt); err == nil && !resolved.Before(since) {
+				keep = true
+				reason = fmt.Sprintf("resolved=%s (after period start)", inc.ResolvedAt)
+			}
+			if keep {
+				incidents = append(incidents, inc)
+				carryoverCount++
+				if verbose {
+					fmt.Fprintf(os.Stderr, "[carryover] INC-%d %s (%s)\n", inc.Number, inc.Title, reason)
+				}
+			}
+		}
+		if verbose {
+			fmt.Fprintf(os.Stderr, "[carryover] %d incidents carried over from before period\n", carryoverCount)
+		}
+
+		sort.Slice(incidents, func(i, j int) bool {
+			return incidents[i].CreatedAt < incidents[j].CreatedAt
+		})
 
 		if serviceFlag, _ := cmd.Flags().GetString("service"); serviceFlag != "" {
 			filters := strings.Split(serviceFlag, ",")

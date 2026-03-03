@@ -18,7 +18,8 @@ var whoamiCmd = &cobra.Command{
 			return err
 		}
 
-		client := pd.NewClient(cfg.APIKey)
+		verbose, _ := cmd.Flags().GetBool("verbose")
+		client := pd.NewClient(cfg.APIKey, verbose)
 		user, err := client.GetCurrentUser(cmd.Context())
 		if err != nil {
 			return err

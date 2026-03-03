@@ -24,7 +24,8 @@ var scheduleNextCmd = &cobra.Command{
 			return err
 		}
 
-		client := pd.NewClient(cfg.APIKey)
+		verbose, _ := cmd.Flags().GetBool("verbose")
+		client := pd.NewClient(cfg.APIKey, verbose)
 		ctx := cmd.Context()
 
 		query, _ := cmd.Flags().GetString("user")
@@ -76,7 +77,8 @@ var scheduleLastCmd = &cobra.Command{
 			return err
 		}
 
-		client := pd.NewClient(cfg.APIKey)
+		verbose, _ := cmd.Flags().GetBool("verbose")
+		client := pd.NewClient(cfg.APIKey, verbose)
 		ctx := cmd.Context()
 
 		query, _ := cmd.Flags().GetString("user")
@@ -133,7 +135,8 @@ var scheduleNowCmd = &cobra.Command{
 			return err
 		}
 
-		client := pd.NewClient(cfg.APIKey)
+		verbose, _ := cmd.Flags().GetBool("verbose")
+		client := pd.NewClient(cfg.APIKey, verbose)
 		ctx := cmd.Context()
 
 		serviceQuery, _ := cmd.Flags().GetString("service")

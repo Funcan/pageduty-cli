@@ -3,6 +3,7 @@ package pagerduty
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -11,11 +12,18 @@ import (
 )
 
 type Client struct {
-	client *pd.Client
+	client  *pd.Client
+	verbose bool
 }
 
-func NewClient(apiKey string) *Client {
-	return &Client{client: pd.NewClient(apiKey)}
+func NewClient(apiKey string, verbose bool) *Client {
+	return &Client{client: pd.NewClient(apiKey), verbose: verbose}
+}
+
+func (c *Client) logf(format string, args ...interface{}) {
+	if c.verbose {
+		fmt.Fprintf(os.Stderr, "[api] "+format+"\n", args...)
+	}
 }
 
 type OnCall struct {
@@ -48,12 +56,14 @@ type User struct {
 
 // GetCurrentUser returns details about the authenticated user.
 func (c *Client) GetCurrentUser(ctx context.Context) (*User, error) {
+	c.logf("GET /users/me")
 	user, err := c.client.GetCurrentUserWithContext(ctx, pd.GetCurrentUserOptions{
 		Includes: []string{"teams"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("getting current user: %w", err)
 	}
+	c.logf("  => %s (%s), %d teams", user.Name, user.Email, len(user.Teams))
 
 	teams := make([]Team, len(user.Teams))
 	for i, t := range user.Teams {
@@ -66,17 +76,21 @@ func (c *Client) GetCurrentUser(ctx context.Context) (*User, error) {
 // empty, it returns the currently authenticated user.
 func (c *Client) ResolveUser(ctx context.Context, query string) (id, name string, err error) {
 	if query == "" {
+		c.logf("GET /users/me")
 		user, err := c.client.GetCurrentUserWithContext(ctx, pd.GetCurrentUserOptions{})
 		if err != nil {
 			return "", "", fmt.Errorf("getting current user: %w", err)
 		}
+		c.logf("  => %s", user.Name)
 		return user.ID, user.Name, nil
 	}
 
+	c.logf("GET /users?query=%s", query)
 	resp, err := c.client.ListUsersWithContext(ctx, pd.ListUsersOptions{Query: query})
 	if err != nil {
 		return "", "", fmt.Errorf("searching users: %w", err)
 	}
+	c.logf("  => %d users", len(resp.Users))
 
 	switch len(resp.Users) {
 	case 0:
@@ -95,6 +109,7 @@ func (c *Client) ResolveUser(ctx context.Context, query string) (id, name string
 // CurrentUserPolicies returns escalation policy IDs for all schedules the
 // authenticated user is a member of.
 func (c *Client) CurrentUserPolicies(ctx context.Context) ([]string, error) {
+	c.logf("GET /users/me")
 	user, err := c.client.GetCurrentUserWithContext(ctx, pd.GetCurrentUserOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("getting current user: %w", err)
@@ -102,6 +117,7 @@ func (c *Client) CurrentUserPolicies(ctx context.Context) ([]string, error) {
 
 	// Look 3 months ahead to find all schedules the user is a member of.
 	now := time.Now()
+	c.logf("GET /oncalls user=%s since=%s until=%s", user.ID, now.Format(time.RFC3339), now.AddDate(0, 3, 0).Format(time.RFC3339))
 	resp, err := c.client.ListOnCallsWithContext(ctx, pd.ListOnCallOptions{
 		UserIDs: []string{user.ID},
 		Since:   now.Format(time.RFC3339),
@@ -111,6 +127,7 @@ func (c *Client) CurrentUserPolicies(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing on-calls: %w", err)
 	}
+	c.logf("  => %d on-call entries", len(resp.OnCalls))
 
 	seen := map[string]bool{}
 	var ids []string
@@ -130,10 +147,12 @@ func (c *Client) CurrentUserPolicies(ctx context.Context) ([]string, error) {
 // ResolveServicePolicies looks up a service by name and returns its
 // escalation policy ID.
 func (c *Client) ResolveServicePolicies(ctx context.Context, query string) ([]string, error) {
+	c.logf("GET /services?query=%s", query)
 	resp, err := c.client.ListServicesWithContext(ctx, pd.ListServiceOptions{Query: query})
 	if err != nil {
 		return nil, fmt.Errorf("searching services: %w", err)
 	}
+	c.logf("  => %d services", len(resp.Services))
 
 	switch len(resp.Services) {
 	case 0:
@@ -151,6 +170,7 @@ func (c *Client) ResolveServicePolicies(ctx context.Context, query string) ([]st
 
 // ListUserOnCalls returns on-call entries for a user within a time range.
 func (c *Client) ListUserOnCalls(ctx context.Context, userID, since, until string) ([]OnCall, error) {
+	c.logf("GET /oncalls user=%s since=%s until=%s", userID, since, until)
 	resp, err := c.client.ListOnCallsWithContext(ctx, pd.ListOnCallOptions{
 		UserIDs: []string{userID},
 		Since:   since,
@@ -160,12 +180,14 @@ func (c *Client) ListUserOnCalls(ctx context.Context, userID, since, until strin
 	if err != nil {
 		return nil, fmt.Errorf("listing on-calls: %w", err)
 	}
+	c.logf("  => %d on-call entries", len(resp.OnCalls))
 	return convertOnCalls(resp.OnCalls), nil
 }
 
 // ListPolicyOnCalls returns current on-call entries for the given escalation
 // policy IDs.
 func (c *Client) ListPolicyOnCalls(ctx context.Context, policyIDs []string) ([]OnCall, error) {
+	c.logf("GET /oncalls policies=%v earliest=true", policyIDs)
 	resp, err := c.client.ListOnCallsWithContext(ctx, pd.ListOnCallOptions{
 		EscalationPolicyIDs: policyIDs,
 		Earliest:            true,
@@ -175,12 +197,14 @@ func (c *Client) ListPolicyOnCalls(ctx context.Context, policyIDs []string) ([]O
 	if err != nil {
 		return nil, fmt.Errorf("listing on-calls: %w", err)
 	}
+	c.logf("  => %d on-call entries", len(resp.OnCalls))
 	return convertOnCalls(resp.OnCalls), nil
 }
 
 // ListPolicyOnCallsInRange returns on-call entries for the given escalation
 // policy IDs within a time range.
 func (c *Client) ListPolicyOnCallsInRange(ctx context.Context, policyIDs []string, since, until string) ([]OnCall, error) {
+	c.logf("GET /oncalls policies=%v since=%s until=%s earliest=true", policyIDs, since, until)
 	resp, err := c.client.ListOnCallsWithContext(ctx, pd.ListOnCallOptions{
 		EscalationPolicyIDs: policyIDs,
 		Earliest:            true,
@@ -192,6 +216,7 @@ func (c *Client) ListPolicyOnCallsInRange(ctx context.Context, policyIDs []strin
 	if err != nil {
 		return nil, fmt.Errorf("listing on-calls: %w", err)
 	}
+	c.logf("  => %d on-call entries", len(resp.OnCalls))
 	return convertOnCalls(resp.OnCalls), nil
 }
 
@@ -300,6 +325,7 @@ type IncidentNote struct {
 // The API's team_ids filter matches on service association, so we also filter
 // client-side to only include incidents explicitly tagged with the requested teams.
 func (c *Client) ListTeamIncidents(ctx context.Context, teamIDs []string, since, until string) ([]Incident, error) {
+	c.logf("GET /incidents teams=%v since=%s until=%s", teamIDs, since, until)
 	wanted := map[string]bool{}
 	for _, id := range teamIDs {
 		wanted[id] = true
@@ -352,15 +378,18 @@ func (c *Client) ListTeamIncidents(ctx context.Context, teamIDs []string, since,
 		}
 		opts.Offset += opts.Limit
 	}
+	c.logf("  => %d incidents (after team filter)", len(all))
 	return all, nil
 }
 
 // ListIncidentNotes returns all notes for the given incident.
 func (c *Client) ListIncidentNotes(ctx context.Context, incidentID string) ([]IncidentNote, error) {
+	c.logf("GET /incidents/%s/notes", incidentID)
 	notes, err := c.client.ListIncidentNotesWithContext(ctx, incidentID)
 	if err != nil {
 		return nil, fmt.Errorf("listing incident notes: %w", err)
 	}
+	c.logf("  => %d notes", len(notes))
 	out := make([]IncidentNote, len(notes))
 	for i, n := range notes {
 		out[i] = IncidentNote{

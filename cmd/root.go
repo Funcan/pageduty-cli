@@ -18,3 +18,7 @@ func Execute() {
 		os.Exit(1)
 	}
 }
+
+func init() {
+	rootCmd.PersistentFlags().Bool("verbose", false, "print API calls and response summaries to stderr")
+}
