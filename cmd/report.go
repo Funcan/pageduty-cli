@@ -105,7 +105,8 @@ var reportCmd = &cobra.Command{
 			}
 		}
 
-		incidents, err := client.ListTeamIncidents(ctx, teamIDs, since.Format(time.RFC3339), until.Format(time.RFC3339))
+		allStatuses := []string{"triggered", "acknowledged", "resolved"}
+		incidents, err := client.ListTeamIncidents(ctx, teamIDs, allStatuses, since.Format(time.RFC3339), until.Format(time.RFC3339))
 		if err != nil {
 			return err
 		}
@@ -114,7 +115,7 @@ var reportCmd = &cobra.Command{
 		noPrevious, _ := cmd.Flags().GetBool("no-previous")
 		carryoverCount := 0
 		if !noPrevious {
-			carryover, err := client.ListTeamIncidents(ctx, teamIDs, since.AddDate(0, -3, 0).Format(time.RFC3339), since.Format(time.RFC3339))
+			carryover, err := client.ListTeamIncidents(ctx, teamIDs, allStatuses, since.AddDate(0, -3, 0).Format(time.RFC3339), since.Format(time.RFC3339))
 			if err != nil {
 				return err
 			}

@@ -324,8 +324,8 @@ type IncidentNote struct {
 // ListTeamIncidents returns all incidents for the given team IDs within a time range.
 // The API's team_ids filter matches on service association, so we also filter
 // client-side to only include incidents explicitly tagged with the requested teams.
-func (c *Client) ListTeamIncidents(ctx context.Context, teamIDs []string, since, until string) ([]Incident, error) {
-	c.logf("GET /incidents teams=%v since=%s until=%s", teamIDs, since, until)
+func (c *Client) ListTeamIncidents(ctx context.Context, teamIDs, statuses []string, since, until string) ([]Incident, error) {
+	c.logf("GET /incidents teams=%v statuses=%v since=%s until=%s", teamIDs, statuses, since, until)
 	wanted := map[string]bool{}
 	for _, id := range teamIDs {
 		wanted[id] = true
@@ -336,7 +336,7 @@ func (c *Client) ListTeamIncidents(ctx context.Context, teamIDs []string, since,
 		TeamIDs:  teamIDs,
 		Since:    since,
 		Until:    until,
-		Statuses: []string{"triggered", "acknowledged", "resolved"},
+		Statuses: statuses,
 		Limit:    100,
 	}
 	for {
